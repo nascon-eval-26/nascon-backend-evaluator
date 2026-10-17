@@ -65,24 +65,9 @@ jobs:
             if [ "$healthy" = false ]; then
               echo "$team_name,0,0,0,0,0,0,0,HEALTH_TIMEOUT" >> final_scores.csv
             else
-              python3 audit_suite.py > result.json || echo "{}" > result.json
+              python3 audit_suite.py > result.json 2>/dev/null || echo "{}" > result.json
 
-              python3 -c "
-              import json
-              try:
-                  with open('result.json') as f:
-                      d = json.load(f)
-              except:
-                  d = {}
-              f_sc = d.get('fixtures', 0.0)
-              s_sc = d.get('scoring', 0.0)
-              st_sc = d.get('standings', 0.0)
-              sto_sc = d.get('store', 0.0)
-              r_sc = d.get('roster', 0.0)
-              rb_sc = d.get('rbac', 0.0)
-              tot = round(f_sc + s_sc + st_sc + sto_sc + r_sc + rb_sc, 2)
-              print(f'${team_name},{f_sc},{s_sc},{st_sc},{sto_sc},{r_sc},{rb_sc},{tot},COMPLETED')
-              " >> final_scores.csv
+              python3 -c 'import json, sys; d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}; f,s,st,sto,r,rb = d.get("fixtures",0.0), d.get("scoring",0.0), d.get("standings",0.0), d.get("store",0.0), d.get("roster",0.0), d.get("rbac",0.0); print(f"{sys.argv[1]},{f},{s},{st},{sto},{r},{rb},{round(f+s+st+sto+r+rb,2)},COMPLETED")' "$team_name" >> final_scores.csv
             fi
 
             cd target_repo
