@@ -1,0 +1,99 @@
+name: Evaluate Submissions
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Evaluator Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Run Sequential Evaluation
+        env:
+          EVAL_PAT: ${{ secrets.EVAL_PAT }}
+          DAY1_SALT: "dummy_eval_salt"
+        run: |
+          echo "team,fixtures,scoring,standings,store,roster,rbac,total,status" > final_scores.csv
+
+          while IFS= read -r repo || [ -n "$repo" ]; do
+            [[ -z "$repo" || "$repo" =~ ^# ]] && continue
+
+            team_name=$(basename "$repo")
+            echo "=========================================="
+            echo "Processing: $team_name ($repo)"
+            echo "=========================================="
+
+            rm -rf target_repo
+            git clone --depth 1 "https://x-access-token:${EVAL_PAT}@github.com/${repo}.git" target_repo || {
+              echo "$team_name,0,0,0,0,0,0,0,CLONE_FAILED" >> final_scores.csv
+              continue
+            }
+
+            cd target_repo
+
+            if ! docker compose up -d --build; then
+              echo "$team_name,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../final_scores.csv
+              docker compose down -v --remove-orphans || true
+              cd ..
+              rm -rf target_repo
+              continue
+            fi
+
+            healthy=false
+            for i in {1..60}; do
+              if curl -s http://localhost:8080/health | grep -q '"status"'; then
+                healthy=true
+                break
+              fi
+              sleep 2
+            done
+
+            cd ..
+
+            if [ "$healthy" = false ]; then
+              echo "$team_name,0,0,0,0,0,0,0,HEALTH_TIMEOUT" >> final_scores.csv
+            else
+              python3 audit_suite.py > result.json || echo "{}" > result.json
+
+              python3 -c "
+              import json
+              try:
+                  with open('result.json') as f:
+                      d = json.load(f)
+              except:
+                  d = {}
+              f_sc = d.get('fixtures', 0.0)
+              s_sc = d.get('scoring', 0.0)
+              st_sc = d.get('standings', 0.0)
+              sto_sc = d.get('store', 0.0)
+              r_sc = d.get('roster', 0.0)
+              rb_sc = d.get('rbac', 0.0)
+              tot = round(f_sc + s_sc + st_sc + sto_sc + r_sc + rb_sc, 2)
+              print(f'${team_name},{f_sc},{s_sc},{st_sc},{sto_sc},{r_sc},{rb_sc},{tot},COMPLETED')
+              " >> final_scores.csv
+            fi
+
+            cd target_repo
+            docker compose down -v --remove-orphans || true
+            cd ..
+            rm -rf target_repo
+
+          done < repos.txt
+
+      - name: Upload Scorecard Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-scores
+          path: final_scores.csv
