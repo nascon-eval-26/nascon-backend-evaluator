@@ -1,4 +1,4 @@
-name: Evaluate Submissions
+name: Evaluate Day 2 Submissions
 
 on:
   workflow_dispatch:
@@ -23,9 +23,10 @@ jobs:
       - name: Run Sequential Evaluation
         env:
           EVAL_PAT: ${{ secrets.EVAL_PAT }}
-          DAY1_SALT: "dummy_eval_salt"
+          DAY1_SALT: "dummy_salt"
+          DAY2_SALT: "dummy_salt"
         run: |
-          echo "team,fixtures,scoring,standings,store,roster,rbac,total,status" > final_scores.csv
+          echo "team,stream_keys,costream,qr_exports,guest_cart,moderation_dlq,observability_privacy,grid_web,total_backend,status" > day2_final_scores.csv
 
           while IFS= read -r repo || [ -n "$repo" ]; do
             [[ -z "$repo" || "$repo" =~ ^# ]] && continue
@@ -37,14 +38,14 @@ jobs:
 
             rm -rf target_repo
             git clone --depth 1 "https://x-access-token:${EVAL_PAT}@github.com/${repo}.git" target_repo || {
-              echo "$team_name,0,0,0,0,0,0,0,CLONE_FAILED" >> final_scores.csv
+              echo "$team_name,0,0,0,0,0,0,0,0,CLONE_FAILED" >> day2_final_scores.csv
               continue
             }
 
             cd target_repo
 
             if ! docker compose up -d --build; then
-              echo "$team_name,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../final_scores.csv
+              echo "$team_name,0,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../day2_final_scores.csv
               docker compose down -v --remove-orphans || true
               cd ..
               rm -rf target_repo
@@ -63,11 +64,27 @@ jobs:
             cd ..
 
             if [ "$healthy" = false ]; then
-              echo "$team_name,0,0,0,0,0,0,0,HEALTH_TIMEOUT" >> final_scores.csv
+              echo "$team_name,0,0,0,0,0,0,0,0,HEALTH_TIMEOUT" >> day2_final_scores.csv
             else
               python3 audit_suite.py > result.json 2>/dev/null || echo "{}" > result.json
 
-              python3 -c 'import json, sys; d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}; f,s,st,sto,r,rb = d.get("fixtures",0.0), d.get("scoring",0.0), d.get("standings",0.0), d.get("store",0.0), d.get("roster",0.0), d.get("rbac",0.0); print(f"{sys.argv[1]},{f},{s},{st},{sto},{r},{rb},{round(f+s+st+sto+r+rb,2)},COMPLETED")' "$team_name" >> final_scores.csv
+              python3 -c '
+              import json, sys
+              try:
+                  d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}
+              except:
+                  d = {}
+              sk = d.get("stream_keys", 0.0)
+              cs = d.get("costream", 0.0)
+              qr = d.get("qr_exports", 0.0)
+              gc = d.get("guest_cart", 0.0)
+              md = d.get("moderation_dlq", 0.0)
+              op = d.get("observability_privacy", 0.0)
+              gw = d.get("grid_web", 0.0)
+              tot = round(sk + cs + qr + gc + md + op + gw, 2)
+              print(f"{sys.argv[1]},{sk},{cs},{qr},{gc},{md},{op},{gw},{tot},COMPLETED")
+              ' "$team_name" >> day2_final_scores.csv
+              tail -n 1 day2_final_scores.csv
             fi
 
             cd target_repo
@@ -77,8 +94,9 @@ jobs:
 
           done < repos.txt
 
-      - name: Upload Scorecard Artifact
+      - name: Upload Day 2 Scorecard Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: final-scores
-          path: final_scores.csv
+          name: day2-final-scores
+          path: day2_final_scores.csv
