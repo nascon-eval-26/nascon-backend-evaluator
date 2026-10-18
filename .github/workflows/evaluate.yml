@@ -68,22 +68,7 @@ jobs:
             else
               python3 audit_suite.py > result.json 2>/dev/null || echo "{}" > result.json
 
-              python3 -c '
-              import json, sys
-              try:
-                  d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}
-              except:
-                  d = {}
-              sk = d.get("stream_keys", 0.0)
-              cs = d.get("costream", 0.0)
-              qr = d.get("qr_exports", 0.0)
-              gc = d.get("guest_cart", 0.0)
-              md = d.get("moderation_dlq", 0.0)
-              op = d.get("observability_privacy", 0.0)
-              gw = d.get("grid_web", 0.0)
-              tot = round(sk + cs + qr + gc + md + op + gw, 2)
-              print(f"{sys.argv[1]},{sk},{cs},{qr},{gc},{md},{op},{gw},{tot},COMPLETED")
-              ' "$team_name" >> day2_final_scores.csv
+              python3 -c 'import json, sys; d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}; sk,cs,qr,gc,md,op,gw = d.get("stream_keys",0.0), d.get("costream",0.0), d.get("qr_exports",0.0), d.get("guest_cart",0.0), d.get("moderation_dlq",0.0), d.get("observability_privacy",0.0), d.get("grid_web",0.0); tot = round(sk+cs+qr+gc+md+op+gw, 2); print(f"{sys.argv[1]},{sk},{cs},{qr},{gc},{md},{op},{gw},{tot},COMPLETED")' "$team_name" >> day2_final_scores.csv
               tail -n 1 day2_final_scores.csv
             fi
 
