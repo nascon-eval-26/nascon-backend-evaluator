@@ -1,186 +1,187 @@
-import concurrent.futures
-import threading
-import requests
-import json
 import base64
+import json
+import requests
 
 BASE_URL = "http://localhost:8080"
+GRID_URL = "http://localhost:4444"
 
-def evaluate_submission():
+def evaluate_day2():
     scores = {
-        "fixtures": 0.0,
-        "scoring": 0.0,
-        "standings": 0.0,
-        "store": 0.0,
-        "roster": 0.0,
-        "rbac": 0.0
+        "stream_keys": 0.0,
+        "costream": 0.0,
+        "qr_exports": 0.0,
+        "guest_cart": 0.0,
+        "moderation_dlq": 0.0,
+        "observability_privacy": 0.0,
+        "grid_web": 0.0
     }
 
-    # Reset backend state
+    # Reset backend state with Day 2 baseline
     try:
         requests.post(f"{BASE_URL}/audit/v1/reset", json={"seed": 42}, timeout=10)
     except Exception:
         return scores
 
-    # 1. FIXTURES & BRACKETS (6 Marks)
+    # 1. STREAM KEY LIFECYCLE (10 Marks)
     try:
-        # Round-robin: 5 teams, single leg
-        rr = requests.post(f"{BASE_URL}/audit/v1/fixtures", json={
-            "format": "round_robin", "teams": ["t1", "t2", "t3", "t4", "t5"], "params": {"legs": 1}
+        # Generate key
+        gen = requests.post(f"{BASE_URL}/audit/v1/stream/key", json={
+            "action": "generate", "player_id": "player-alpha-1", "label": "Main"
         }, timeout=5).json()
-        if len(rr.get("rounds", [])) == 5:
-            scores["fixtures"] += 2.0
+        if gen.get("status") == "active" and gen.get("stream_key"):
+            scores["stream_keys"] += 5.0
 
-        # Swiss pairing round 1
-        sw = requests.post(f"{BASE_URL}/audit/v1/fixtures", json={
-            "format": "swiss", "teams": ["t1", "t2", "t3", "t4"], "params": {"total_rounds": 2, "round": 1}
+        # Revoke key
+        rev = requests.post(f"{BASE_URL}/audit/v1/stream/key", json={
+            "action": "revoke", "player_id": "player-alpha-1"
         }, timeout=5).json()
-        if len(sw.get("pairings", [])) == 2:
-            scores["fixtures"] += 2.0
+        if rev.get("status") == "revoked" and rev.get("ingest_endpoints") is None:
+            scores["stream_keys"] += 5.0
+    except Exception:
+        pass
 
-        # Single elimination bracket size
-        se = requests.post(f"{BASE_URL}/audit/v1/fixtures", json={
-            "format": "single_elim", "teams": ["t1", "t2", "t3", "t4", "t5", "t6"], "params": {}
+    # 2. 4-WAY CO-STREAM & HOST-DROP HANDOFF (10 Marks)
+    try:
+        # Session creation with capacity check
+        cs = requests.post(f"{BASE_URL}/audit/v1/costream/session", json={
+            "session_id": "cs-session-101",
+            "host_player_id": "player-alpha-1",
+            "participants": ["player-alpha-1", "player-alpha-2", "player-beta-1", "player-beta-2"],
+            "layout": "grid_4",
+            "simulate_host_drop": False
         }, timeout=5).json()
-        if se.get("bracket_size") == 8:
-            scores["fixtures"] += 2.0
+        if cs.get("status") == "active" and len(cs.get("active_participants", [])) == 4:
+            scores["costream"] += 5.0
+
+        # Host-drop handoff
+        drop = requests.post(f"{BASE_URL}/audit/v1/costream/session", json={
+            "session_id": "cs-session-102",
+            "host_player_id": "player-alpha-1",
+            "participants": ["player-alpha-1", "player-alpha-2", "player-beta-1"],
+            "layout": "grid_4",
+            "simulate_host_drop": True
+        }, timeout=5).json()
+        if drop.get("active_host") == "player-alpha-2" and drop.get("handoff_occurred") is True:
+            scores["costream"] += 5.0
     except Exception:
         pass
 
-    # 2. SCORING & MYSTERY SPORT (6 Marks)
+    # 3. DYNAMIC QR DEEP-LINKING & EXPORTS (15 Marks)
     try:
-        # Mystery sport setup
-        sp = requests.post(f"{BASE_URL}/audit/v1/sports", json={
-            "sport_id": "dodgeball", "name": "Dodgeball", "scoring_model": "event",
-            "periods": {"count": 2, "duration_minutes": 15},
-            "scoring_events": {"tag_out": {"points": 1}},
-            "draw_allowed": True, "overtime": {"policy": "none"},
-            "roster": {"min_squad_size": 6, "max_squad_size": 10, "required_positions": {}}
-        }, timeout=5)
-        if sp.status_code == 201:
-            scores["scoring"] += 2.0
+        # Dynamic QR Metadata
+        qr = requests.get(f"{BASE_URL}/audit/v1/qr/match-m1?inspect=true", timeout=5).json()
+        if qr.get("short_url") and "/web/matches/match-m1" in qr.get("target_route", ""):
+            scores["qr_exports"] += 5.0
 
-        # Event stream progression
-        requests.post(f"{BASE_URL}/audit/v1/events", json={
-            "event_id": "e1", "match_id": "m100", "type": "match_init",
-            "payload": {"sport_id": "football", "home_team_id": "t1", "away_team_id": "t2"}
-        }, timeout=5)
-        requests.post(f"{BASE_URL}/audit/v1/events", json={
-            "event_id": "e2", "match_id": "m100", "type": "match_start", "payload": {}
-        }, timeout=5)
-        sc = requests.post(f"{BASE_URL}/audit/v1/events", json={
-            "event_id": "e3", "match_id": "m100", "type": "score", "payload": {"team_id": "t1", "event_type": "goal"}
-        }, timeout=5)
-        if sc.status_code == 201:
-            scores["scoring"] += 2.0
+        # Vector and Raster binary exports
+        svg = requests.get(f"{BASE_URL}/audit/v1/qr/match-m1/export.svg", timeout=5)
+        png = requests.get(f"{BASE_URL}/audit/v1/qr/match-m1/export.png", timeout=5)
+        pdf = requests.get(f"{BASE_URL}/audit/v1/qr/match-m1/export.pdf", timeout=5)
 
-        # Compensating event rollback
-        comp = requests.post(f"{BASE_URL}/audit/v1/events", json={
-            "event_id": "e4", "match_id": "m100", "type": "compensation", "payload": {"compensates": "e3", "reason": "VAR"}
-        }, timeout=5)
-        score_view = requests.get(f"{BASE_URL}/audit/v1/score/m100", timeout=5).json()
-        if comp.status_code == 201 and score_view.get("home", {}).get("score") == 0:
-            scores["scoring"] += 2.0
+        has_svg = "<svg" in svg.text or "<?xml" in svg.text
+        has_png = png.content.startswith(b"\x89PNG")
+        has_pdf = pdf.content.startswith(b"%PDF")
+
+        if has_svg and has_png and has_pdf:
+            scores["qr_exports"] += 10.0
+        elif has_svg or has_png or has_pdf:
+            scores["qr_exports"] += 5.0
     except Exception:
         pass
 
-    # 3. STANDINGS ENGINE (6 Marks)
+    # 4. GUEST 403 GUARD & ATOMIC CART MERGE (15 Marks)
     try:
-        requests.post(f"{BASE_URL}/audit/v1/leagues", json={
-            "league_id": "lg-test", "sport_id": "football", "teams": ["t1", "t2"],
-            "fixtures": [{"match_id": "m-lg-1", "home": "t1", "away": "t2"}],
-            "qualification": {"spots": 1}
-        }, timeout=5)
-        requests.post(f"{BASE_URL}/audit/v1/events", json={"event_id": "el1", "match_id": "m-lg-1", "type": "match_start", "payload": {}}, timeout=5)
-        requests.post(f"{BASE_URL}/audit/v1/events", json={"event_id": "el2", "match_id": "m-lg-1", "type": "score", "payload": {"team_id": "t1", "event_type": "goal"}}, timeout=5)
-        requests.post(f"{BASE_URL}/audit/v1/events", json={"event_id": "el3", "match_id": "m-lg-1", "type": "match_end", "payload": {}}, timeout=5)
+        # Direct write rejection verification
+        direct_write = requests.post(
+            f"{BASE_URL}/audit/v1/checkout",
+            headers={"Authorization": "Bearer guest_anon_tok_7721"},
+            json={"items": [{"variant_id": "var-jersey-001-M", "quantity": 1}]},
+            timeout=5
+        )
+        if direct_write.status_code == 403:
+            scores["guest_cart"] += 5.0
 
-        st = requests.get(f"{BASE_URL}/audit/v1/standings/lg-test", timeout=5).json()
-        table = st.get("table", [])
-        if len(table) == 2 and table[0].get("team_id") == "t1" and table[0].get("points") == 3:
-            scores["standings"] += 3.0
-        if table and table[0].get("status") in ["clinched", "still_possible"]:
-            scores["standings"] += 3.0
+        # Atomic cart merge
+        merge = requests.post(f"{BASE_URL}/audit/v1/guest/cart-merge", json={
+            "guest_token": "guest_anon_tok_7721",
+            "registered_user_id": "player-alpha-1",
+            "guest_cart": [{"variant_id": "var-jersey-001-L", "quantity": 1}],
+            "test_write_block": True
+        }, timeout=5).json()
+
+        if merge.get("write_rejection_code") == 403 and merge.get("cart_merged") is True:
+            if merge.get("active_cart", {}).get("total_items") >= 1:
+                scores["guest_cart"] += 10.0
     except Exception:
         pass
 
-    # 4. CONCURRENCY & STORE (6 Marks)
+    # 5. CHAT MODERATION & DLQ PROBE (10 Marks)
     try:
-        requests.post(f"{BASE_URL}/audit/v1/reset", json={"stock": {"var-jersey-001-M": 1}}, timeout=10)
-        barrier = threading.Barrier(20)
+        mod = requests.post(f"{BASE_URL}/audit/v1/moderation/test", json={
+            "chat_room_id": "chat-cs-session-101",
+            "incoming_messages": [
+                {"message_id": "m1", "sender": "user-clean", "text": "Great play!"},
+                {"message_id": "m2", "sender": "user-spammer", "text": "Go to b@d_word website!"},
+                {"message_id": "m3", "sender": "user-flooder", "text": "GOAL! AAAA!!!"}
+            ],
+            "check_dlq": True,
+            "simulate_failed_notifications": 1
+        }, timeout=5).json()
 
-        def attempt_buy(idx):
-            barrier.wait()
-            return requests.post(f"{BASE_URL}/audit/v1/checkout", json={
-                "order_id": f"ord-burst-{idx}", "customer_id": f"c-{idx}",
-                "items": [{"variant_id": "var-jersey-001-M", "quantity": 1}],
-                "payment": {"token": "tok_success"}
-            }, timeout=10)
+        # Profanity masking & flood rejection
+        filtered = mod.get("filtered_messages", [])
+        masked = any("***" in msg.get("text", "") for msg in filtered)
+        flooded_removed = not any(msg.get("sender") == "user-flooder" for msg in filtered)
+        kicked_and_muted = "user-spammer" in mod.get("kicked_users", []) and "user-flooder" in mod.get("muted_users", [])
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            checkout_responses = list(executor.map(attempt_buy, range(20)))
+        if masked and flooded_removed and kicked_and_muted:
+            scores["moderation_dlq"] += 7.0
+        elif masked or flooded_removed:
+            scores["moderation_dlq"] += 4.0
 
-        codes = [res.status_code for res in checkout_responses]
-        if codes.count(201) == 1 and codes.count(409) == 19:
-            scores["store"] += 4.0
-
-        inv = requests.get(f"{BASE_URL}/audit/v1/inventory/var-jersey-001-M", timeout=5).json()
-        successful_res = next((res.json() for res in checkout_responses if res.status_code == 201), None)
-        pdf_b64 = successful_res.get("receipt", {}).get("pdf_base64", "") if successful_res else ""
-        pdf_bytes = base64.b64decode(pdf_b64) if pdf_b64 else b""
-
-        if inv.get("stock") == 0 and inv.get("reserved") == 0 and pdf_bytes.startswith(b"%PDF"):
-            scores["store"] += 2.0
+        if mod.get("dlq_status", {}).get("queue_depth", 0) >= 1:
+            scores["moderation_dlq"] += 3.0
     except Exception:
         pass
 
-    # 5. ROSTER & TRANSFERS (6 Marks)
+    # 6. OBSERVABILITY & PRIVACY (10 Marks)
     try:
-        requests.post(f"{BASE_URL}/audit/v1/roster/setup", json={
-            "league": {"league_id": "lg-r", "tenant_id": "tenant-alpha", "sport_id": "football",
-                       "transfer_window": {"open": "2026-01-01", "close": "2026-12-31"}, "max_squad_size": 2},
-            "squads": [{"squad_id": "sq-1", "club_id": "club-alpha-1", "tenant_id": "tenant-alpha", "name": "Squad 1"},
-                       {"squad_id": "sq-2", "club_id": "club-alpha-2", "tenant_id": "tenant-alpha", "name": "Squad 2"}],
-            "players": [{"player_id": "p-1", "name": "P1", "position": "gk", "squad_id": "sq-1", "role": "starter"}]
-        }, timeout=5)
+        # Prometheus Metrics Probe
+        metrics = requests.get(f"{BASE_URL}/metrics", timeout=5).text
+        req_metrics = ["nascon_active_ws_connections", "nascon_active_streams_total", "nascon_dlq_depth", "nascon_qr_scans_total"]
+        if all(m in metrics for m in req_metrics):
+            scores["observability_privacy"] += 5.0
 
-        tr = requests.post(f"{BASE_URL}/audit/v1/roster/transfer", json={
-            "request_id": "tr-1", "league_id": "lg-r", "player_id": "p-1", "type": "transfer",
-            "from_squad_id": "sq-1", "to_squad_id": "sq-2", "effective_date": "2026-06-01", "reason": "move"
-        }, timeout=5)
-        if tr.status_code == 201:
-            scores["roster"] += 3.0
-
-        hist = requests.get(f"{BASE_URL}/audit/v1/roster/history/p-1", timeout=5).json()
-        if hist.get("current_squad_id") == "sq-2" and len(hist.get("history", [])) >= 1:
-            scores["roster"] += 3.0
+        # Privacy Erasure Probe
+        priv = requests.delete(f"{BASE_URL}/audit/v1/privacy/user/player-alpha-1", timeout=5).json()
+        if priv.get("status") == "anonymized" and priv.get("tokens_wiped") is True:
+            scores["observability_privacy"] += 5.0
     except Exception:
         pass
 
-    # 6. RBAC & SECURITY (6 Marks)
+    # 7. SELENIUM GRID 4 & GUEST WEB DOM CONTRACT (10 Marks)
     try:
-        rbac = requests.post(f"{BASE_URL}/audit/v1/rbac-matrix", timeout=5).json()
-        admin_token = rbac.get("tokens", {}).get("super_admin")
-        viewer_token = rbac.get("tokens", {}).get("viewer")
+        # Grid readiness probe
+        grid_res = requests.get(f"{GRID_URL}/status", timeout=5).json()
+        ready = grid_res.get("value", {}).get("ready", False)
+        nodes = len(grid_res.get("value", {}).get("nodes", []))
+        if ready and nodes >= 3:
+            scores["grid_web"] += 5.0
 
-        p1_admin = requests.post(f"{BASE_URL}/audit/v1/rbac/tenants", headers={"Authorization": f"Bearer {admin_token}"}, json={}, timeout=5)
-        p1_viewer = requests.post(f"{BASE_URL}/audit/v1/rbac/tenants", headers={"Authorization": f"Bearer {viewer_token}"}, json={}, timeout=5)
-
-        if p1_admin.status_code == 200 and p1_viewer.status_code == 403:
-            scores["rbac"] += 3.0
-
-        f_club = rbac.get("context", {}).get("foreign_club_id", "club-beta-1")
-        cross = requests.get(f"{BASE_URL}/audit/v1/rbac/clubs/{f_club}", headers={"Authorization": f"Bearer {viewer_token}"}, timeout=5)
-        if cross.status_code == 403:
-            scores["rbac"] += 1.5
-
-        ping_codes = [requests.get(f"{BASE_URL}/api/v1/ping", timeout=2).status_code for _ in range(150)]
-        if 429 in ping_codes:
-            scores["rbac"] += 1.5
+        # Guest Web Player DOM inspection
+        web_page = requests.get(f"{BASE_URL}/web/matches/match-m1/live", timeout=5).text
+        required_selectors = [
+            'data-testid="guest-video-player"',
+            'data-testid="live-score-banner"',
+            'data-testid="chat-input-field"',
+            'data-testid="chat-send-btn"'
+        ]
+        if all(sel in web_page for sel in required_selectors):
+            scores["grid_web"] += 5.0
     except Exception:
         pass
 
     return scores
 
 if __name__ == "__main__":
-    print(json.dumps(evaluate_submission()))
+    print(json.dumps(evaluate_day2()))
