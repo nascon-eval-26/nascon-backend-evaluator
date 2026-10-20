@@ -37,17 +37,17 @@ jobs:
 
             rm -rf target_repo
             git clone --depth 1 "https://x-access-token:${EVAL_PAT}@github.com/${repo}.git" target_repo || {
-              echo "$team_name,0,0,0,0,0,0,0,CLONE_FAILED" >> final_scores.csv
+              echo "$team_name,0,0,0,0,0,0,0,0,CLONE_FAILED" >> final_scores.csv
               continue
             }
 
             cd target_repo
 
-            # Neutralize MinIO so unauthenticated Docker Hub pulls don't abort Day 1 startup
-            sed -i 's|image:.*minio/minio.*|image: alpine\n    command: ["sleep", "infinity"]|g' docker-compose.yml docker-compose.yaml 2>/dev/null || true
+            # Swap Docker Hub MinIO with Quay.io mirror to avoid auth/rate limits without modifying YAML commands
+            sed -i 's|image:.*minio/minio.*|image: quay.io/minio/minio:latest|g' docker-compose.yml docker-compose.yaml 2>/dev/null || true
 
             if ! docker compose up -d --build; then
-              echo "$team_name,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../final_scores.csv
+              echo "$team_name,0,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../final_scores.csv
               docker compose down -v --remove-orphans || true
               cd ..
               rm -rf target_repo
@@ -66,25 +66,11 @@ jobs:
             cd ..
 
             if [ "$healthy" = false ]; then
-              echo "$team_name,0,0,0,0,0,0,0,HEALTH_TIMEOUT" >> final_scores.csv
+              echo "$team_name,0,0,0,0,0,0,0,0,HEALTH_TIMEOUT" >> final_scores.csv
             else
               python3 audit_suite.py > result.json 2>/dev/null || echo "{}" > result.json
 
-              python3 -c '
-              import json, sys
-              try:
-                  d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}
-              except:
-                  d = {}
-              f = d.get("fixtures", 0.0)
-              s = d.get("scoring", 0.0)
-              st = d.get("standings", 0.0)
-              sto = d.get("store", 0.0)
-              r = d.get("roster", 0.0)
-              rb = d.get("rbac", 0.0)
-              tot = round(f + s + st + sto + r + rb, 2)
-              print(f"{sys.argv[1]},{f},{s},{st},{sto},{r},{rb},{tot},COMPLETED")
-              ' "$team_name" >> final_scores.csv
+              python3 -c 'import json, sys; d = json.load(open("result.json")) if open("result.json").read().strip().startswith("{") else {}; f,s,st,sto,r,rb = d.get("fixtures",0.0), d.get("scoring",0.0), d.get("standings",0.0), d.get("store",0.0), d.get("roster",0.0), d.get("rbac",0.0); tot = round(f+s+st+sto+r+rb, 2); print(f"{sys.argv[1]},{f},{s},{st},{sto},{r},{rb},{tot},COMPLETED")' "$team_name" >> final_scores.csv
               tail -n 1 final_scores.csv
             fi
 
