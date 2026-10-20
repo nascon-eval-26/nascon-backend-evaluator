@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install Dependencies
-        run: pip install requests
+        run: pip install requests pyyaml
 
       - name: Run Sequential Evaluation
         env:
@@ -43,11 +43,8 @@ jobs:
 
             cd target_repo
 
-            # 1. Swap MinIO to public Alpine with sleep entrypoint
-            sed -i 's|image:.*minio.*|image: public.ecr.aws/docker/library/alpine:latest\n    entrypoint: ["sh", "-c", "sleep infinity"]|g' docker-compose.yml docker-compose.yaml 2>/dev/null || true
-
-            # 2. Delete existing server command to prevent duplicate key errors
-            sed -i '/command:.*server.*/d' docker-compose.yml docker-compose.yaml 2>/dev/null || true
+            # Neutralize minio service: replaces with public ECR alpine and removes conflicting command/entrypoint keys
+            python3 -c 'import glob, os, yaml; [yaml.dump({**d, "services": {k: ({"image": "public.ecr.aws/docker/library/alpine:latest", "entrypoint": ["sh", "-c", "sleep infinity"], "healthcheck": {"test": ["CMD-SHELL", "exit 0"], "interval": "2s", "timeout": "2s", "retries": 1}} if isinstance(v, dict) and ("minio" in k.lower() or "minio" in str(v.get("image","")).lower()) else v) for k, v in d.get("services", {}).items() if isinstance(v, dict)}}, open(f, "w"), sort_keys=False) for f in glob.glob("docker-compose*.y*ml") if os.path.exists(f) and (d := yaml.safe_load(open(f))) and isinstance(d, dict)]' 2>/dev/null || true
 
             if ! docker compose up -d --build; then
               echo "$team_name,0,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../final_scores.csv
