@@ -175,7 +175,7 @@ def evaluate_submission():
         if cross.status_code == 403:
             scores["rbac"] += 1.5
 
-        # Connection-pooled rate limit check with early break
+        # Early-exit connection-pooled rate limit check
         with requests.Session() as s:
             for _ in range(120):
                 resp = s.get(f"{BASE_URL}/api/v1/ping", timeout=2)
