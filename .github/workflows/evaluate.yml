@@ -20,6 +20,20 @@ jobs:
       - name: Install Dependencies
         run: pip install requests pyyaml
 
+      - name: Build Offline Local Dummy MinIO Image
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -qq -y busybox-static
+          mkdir -p /tmp/dummy-minio/bin
+          cp /bin/busybox /tmp/dummy-minio/bin/busybox
+          ln -sf busybox /tmp/dummy-minio/bin/sh
+          ln -sf busybox /tmp/dummy-minio/bin/sleep
+          cat << 'EOF' > /tmp/dummy-minio/Dockerfile
+          FROM scratch
+          COPY bin /bin
+          ENTRYPOINT ["/bin/sleep", "infinity"]
+          EOF
+          docker build -t local-minio:latest /tmp/dummy-minio
+
       - name: Run Sequential Evaluation
         env:
           EVAL_PAT: ${{ secrets.EVAL_PAT }}
@@ -43,8 +57,38 @@ jobs:
 
             cd target_repo
 
-            # Neutralize minio service: replaces with public ECR alpine and removes conflicting command/entrypoint keys
-            python3 -c 'import glob, os, yaml; [yaml.dump({**d, "services": {k: ({"image": "public.ecr.aws/docker/library/alpine:latest", "entrypoint": ["sh", "-c", "sleep infinity"], "healthcheck": {"test": ["CMD-SHELL", "exit 0"], "interval": "2s", "timeout": "2s", "retries": 1}} if isinstance(v, dict) and ("minio" in k.lower() or "minio" in str(v.get("image","")).lower()) else v) for k, v in d.get("services", {}).items() if isinstance(v, dict)}}, open(f, "w"), sort_keys=False) for f in glob.glob("docker-compose*.y*ml") if os.path.exists(f) and (d := yaml.safe_load(open(f))) and isinstance(d, dict)]' 2>/dev/null || true
+            # Swap MinIO service with local offline image and remove duplicate/conflicting keys
+            python3 -c '
+import glob, yaml
+
+for filename in glob.glob("docker-compose*.y*ml"):
+    try:
+        with open(filename, "r") as f:
+            data = yaml.safe_load(f)
+        if not data or not isinstance(data, dict) or "services" not in data:
+            continue
+        services = data.get("services", {})
+        if not isinstance(services, dict):
+            continue
+        for sname, sdef in list(services.items()):
+            if not isinstance(sdef, dict):
+                continue
+            img = str(sdef.get("image", "")).lower()
+            if "minio" in sname.lower() or "minio" in img:
+                sdef.clear()
+                sdef["image"] = "local-minio:latest"
+                sdef["entrypoint"] = ["/bin/sleep", "infinity"]
+                sdef["healthcheck"] = {
+                    "test": ["CMD", "/bin/sh", "-c", "exit 0"],
+                    "interval": "2s",
+                    "timeout": "2s",
+                    "retries": 1
+                }
+        with open(filename, "w") as f:
+            yaml.dump(data, f, sort_keys=False)
+    except Exception:
+        pass
+'
 
             if ! docker compose up -d --build; then
               echo "$team_name,0,0,0,0,0,0,0,0,DOCKER_BUILD_FAILED" >> ../final_scores.csv
