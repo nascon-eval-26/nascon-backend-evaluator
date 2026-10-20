@@ -1,8 +1,8 @@
+import base64
 import concurrent.futures
+import json
 import threading
 import requests
-import json
-import base64
 
 BASE_URL = "http://localhost:8080"
 
@@ -126,7 +126,8 @@ def evaluate_submission():
 
         inv = requests.get(f"{BASE_URL}/audit/v1/inventory/var-jersey-001-M", timeout=5).json()
         successful_res = next((res.json() for res in checkout_responses if res.status_code == 201), None)
-        pdf_b64 = successful_res.get("receipt", {}).get("pdf_base64", "") if successful_res else ""
+        receipt_obj = (successful_res.get("receipt") or {}) if successful_res else {}
+        pdf_b64 = receipt_obj.get("pdf_base64", "")
         pdf_bytes = base64.b64decode(pdf_b64) if pdf_b64 else b""
 
         if inv.get("stock") == 0 and inv.get("reserved") == 0 and pdf_bytes.startswith(b"%PDF"):
@@ -174,9 +175,13 @@ def evaluate_submission():
         if cross.status_code == 403:
             scores["rbac"] += 1.5
 
-        ping_codes = [requests.get(f"{BASE_URL}/api/v1/ping", timeout=2).status_code for _ in range(150)]
-        if 429 in ping_codes:
-            scores["rbac"] += 1.5
+        # Fast connection-pooled rate limit check with early exit
+        with requests.Session() as s:
+            for _ in range(120):
+                resp = s.get(f"{BASE_URL}/api/v1/ping", timeout=2)
+                if resp.status_code == 429:
+                    scores["rbac"] += 1.5
+                    break
     except Exception:
         pass
 
